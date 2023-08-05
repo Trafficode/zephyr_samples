@@ -13,6 +13,7 @@
 #include <zephyr/net/sntp.h>
 
 #include "wifi_net.h"
+#include "config_wifi.h"
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_DBG);
 
