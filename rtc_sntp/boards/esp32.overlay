@@ -1,0 +1,12 @@
+/ {
+    leds {
+        compatible = "gpio-leds";
+        info_led: info_led {
+            gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+        };
+    };
+};
+
+&wifi {
+	status = "okay";
+};

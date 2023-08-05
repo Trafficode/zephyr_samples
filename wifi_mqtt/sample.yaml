@@ -1,0 +1,16 @@
+sample:
+  description: wifi mqtt sample, the simplest Zephyr
+    application
+  name: wifi_mqtt
+common:
+  tags: introduction
+  integration_platforms:
+    - native_posix
+  harness: console
+  harness_config:
+    type: one_line
+    regex:
+      - "wifi mqtt! (.*)"
+tests:
+  sample.basic.helloworld:
+    tags: introduction

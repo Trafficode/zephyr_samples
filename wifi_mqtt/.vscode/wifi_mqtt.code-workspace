@@ -1,0 +1,51 @@
+{
+	"folders": [
+		{
+			"path": "../",
+		},
+		{
+			"path": "../../../"
+		},
+		{
+			"path": "/root/zephyrproject"
+		}
+	],
+	"settings": {
+		"cmake.configureOnOpen": false,
+		"cmake.sourceDirectory": "/root/Workspace/zephyr_samples/wifi_mqtt",
+		"C_Cpp.errorSquiggles": "disabled",
+		"editor.rulers": [
+			80
+		],
+		"files.exclude": {
+			"**/*.o": true
+		},
+		"files.associations": {
+			"chrono": "c",
+			"time.h": "c"
+		},
+		"editor.fontWeight": "normal",
+		"editor.fontSize": 13,
+		"editor.formatOnSave": true,
+		"editor.formatOnSaveMode": "file",
+		"terminal.integrated.fontSize": 11,
+		"terminal.integrated.fontWeight": "bold",
+		"clang-format.style": "file",
+		"clang-format.language.typescript.enable": false,
+		"clang-format.language.proto.enable": false,
+		"clang-format.language.objective-cpp.enable": false,
+		"clang-format.language.objective-c.enable": false,
+		"clang-format.language.javascript.enable": false,
+		"clang-format.language.java.enable": false,
+		"clang-format.language.glsl.enable": false,
+		"clang-format.language.cuda.enable": false,
+		"clang-format.language.apex.enable": false,
+		"clang-format.fallbackStyle": "google",
+		"[c]": {
+			"editor.defaultFormatter": "xaver.clang-format"
+		},
+		"[h]": {
+			"editor.defaultFormatter": "xaver.clang-format"
+		},
+	}
+}

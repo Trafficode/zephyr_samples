@@ -1,0 +1,16 @@
+sample:
+  description: blinky dt sample, the simplest Zephyr
+    application
+  name: blinky dt
+common:
+  tags: introduction
+  integration_platforms:
+    - native_posix
+  harness: console
+  harness_config:
+    type: one_line
+    regex:
+      - "Blinky DT! (.*)"
+tests:
+  sample.basic.helloworld:
+    tags: introduction

@@ -1,0 +1,4 @@
+**/build
+rtc_sntp/inc/config_wifi.h
+wifi/inc/config_wifi.h
+wifi_mqtt/inc/config_wifi.h
