@@ -8,6 +8,7 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/net/mqtt.h>
 
 #include "config_wifi.h"
 #include "mqtt_worker.h"
@@ -17,6 +18,8 @@ LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_DBG);
 
 static const struct gpio_dt_spec InfoLed =
     GPIO_DT_SPEC_GET(DT_NODELABEL(info_led), gpios);
+
+#define SUBSCRIBE_TOPIC "/test/mosquitto/pubsub/topic"
 
 int main(void) {
     LOG_INF("Board: %s", CONFIG_BOARD);
@@ -34,7 +37,14 @@ int main(void) {
     }
 
     wifi_net_init(WIFI_SSID, WIFI_PASS);
-    mqtt_worker_init("test.mosquitto.org", NULL, 1883);
+
+    struct mqtt_topic subs_topic = {
+        .topic = {.utf8 = (uint8_t *)SUBSCRIBE_TOPIC,
+                  .size = strlen(SUBSCRIBE_TOPIC)},
+        .qos = MQTT_QOS_0_AT_MOST_ONCE};
+    struct mqtt_subscription_list subs_list = {
+        .list = &subs_topic, .list_count = 1U, .message_id = 1U};
+    mqtt_worker_init("test.mosquitto.org", NULL, 1883, &subs_list);
 
     while (1) {
         k_sleep(K_SECONDS(1));
