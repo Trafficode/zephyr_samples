@@ -9,9 +9,9 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include "config_wifi.h"
 #include "mqtt_worker.h"
 #include "wifi_net.h"
-#include "config_wifi.h"
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_DBG);
 
@@ -34,7 +34,7 @@ int main(void) {
     }
 
     wifi_net_init(WIFI_SSID, WIFI_PASS);
-    mqtt_worker_init("test.mosquitto.org", 1883);
+    mqtt_worker_init("test.mosquitto.org", NULL, 1883);
 
     while (1) {
         k_sleep(K_SECONDS(1));

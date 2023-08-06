@@ -14,16 +14,14 @@
 		"cmake.configureOnOpen": false,
 		"cmake.sourceDirectory": "/root/Workspace/zephyr_samples/wifi_mqtt",
 		"C_Cpp.errorSquiggles": "disabled",
+		"C_Cpp.codeAnalysis.clangTidy.enabled": true,
 		"editor.rulers": [
 			80
 		],
 		"files.exclude": {
 			"**/*.o": true
 		},
-		"files.associations": {
-			"chrono": "c",
-			"time.h": "c"
-		},
+		"files.associations": {},
 		"editor.fontWeight": "normal",
 		"editor.fontSize": 13,
 		"editor.formatOnSave": true,
@@ -47,5 +45,9 @@
 		"[h]": {
 			"editor.defaultFormatter": "xaver.clang-format"
 		},
+		"[python]": {
+			"editor.defaultFormatter": "ms-python.autopep8"
+		},
+		"python.formatting.provider": "none",
 	}
 }

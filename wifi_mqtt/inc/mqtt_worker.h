@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 
-void mqtt_worker_init(const char *broker, uint32_t port);
+void mqtt_worker_init(const char *hostname, const char *addr, int32_t port);
 
 #endif /* MQTT_WORKER_H_ */
 /* ---------------------------------------------------------------------------
