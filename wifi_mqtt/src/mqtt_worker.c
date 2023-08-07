@@ -266,26 +266,36 @@ failed_done:
 static int32_t dns_resolve(void) {
     static struct zsock_addrinfo hints;
     struct zsock_addrinfo *haddr;
+    int32_t res = 0;
+    struct sockaddr_in *ipv4_broker = (struct sockaddr_in *)&Broker;
+
+    ipv4_broker->sin_family = AF_INET;
+    ipv4_broker->sin_port = htons(BrokerPort);
+    res = zsock_inet_pton(AF_INET, BrokerHostnameStr, &ipv4_broker->sin_addr);
+    if (0 != res) {
+        res = 0; /* 0 - success, string ip address delivered, dns not needed */
+        goto resolve_done;
+    }
 
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = 0;
 
-    int32_t res = net_getaddrinfo_addr_str(BrokerHostnameStr, BrokerPortStr,
-                                           &hints, &haddr);
+    res = net_getaddrinfo_addr_str(BrokerHostnameStr, BrokerPortStr, &hints,
+                                   &haddr);
     if (0 != res) {
         LOG_ERR("Unable to get address of broker, err %d", res);
-        goto failed_done;
+        goto resolve_done;
     }
 
-    struct sockaddr_in *ipv4_broker = (struct sockaddr_in *)&Broker;
     ipv4_broker->sin_family = AF_INET;
     ipv4_broker->sin_port = htons(BrokerPort);
     net_ipaddr_copy(&ipv4_broker->sin_addr, &net_sin(haddr->ai_addr)->sin_addr);
+
+resolve_done:
     uint8_t *in_addr = ipv4_broker->sin_addr.s4_addr;
-    LOG_INF("Broker addr %d.%d.%d.%d", in_addr[3], in_addr[2], in_addr[1],
-            in_addr[0]);
-failed_done:
+    LOG_INF("Broker addr %d.%d.%d.%d", in_addr[0], in_addr[1], in_addr[2],
+            in_addr[3]);
     return (res);
 }
 
@@ -320,7 +330,7 @@ failed_done:
     return (res);
 }
 
-void mqtt_worker_init(const char *hostname, const char *addr, int32_t port,
+void mqtt_worker_init(const char *hostname, int32_t port,
                       struct mqtt_subscription_list *subs, subs_cb_t subs_cb) {
     struct mqtt_client *client = &ClientCtx;
 

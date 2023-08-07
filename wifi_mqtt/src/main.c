@@ -51,7 +51,7 @@ int main(void) {
         .qos = MQTT_QOS_0_AT_MOST_ONCE};
     struct mqtt_subscription_list subs_list = {
         .list = &subs_topic, .list_count = 1U, .message_id = 1U};
-    mqtt_worker_init("test.mosquitto.org", NULL, 1883, &subs_list, subs_cb);
+    mqtt_worker_init("test.mosquitto.org", 1883, &subs_list, subs_cb);
 
     int32_t lopp_cnt = 0;
     for (;;) {
