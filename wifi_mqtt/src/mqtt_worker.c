@@ -18,8 +18,8 @@ LOG_MODULE_REGISTER(MQTT, LOG_LEVEL_DBG);
 #define CLIENT_ID ("zephyrux")
 
 typedef struct subs_data {
-    uint8_t topic[128];
-    uint8_t payload[256];
+    uint8_t topic[MQTT_WORKER_MAX_TOPIC_LEN];
+    uint8_t payload[MQTT_WORKER_MAX_PAYLOAD_LEN];
     uint16_t payload_len;
 } subs_data_t;
 
@@ -61,8 +61,6 @@ static worker_state_t StateMachine = DNS_RESOLVE;
 bool Connected = false;
 bool Subscribed = false;
 
-static subs_data_t SubsData = {0};
-
 #define MQTT_NET_STACK_SIZE (1024)
 #define MQTT_NET_PRIORITY   (5)
 K_THREAD_DEFINE(MqttNetTid, MQTT_NET_STACK_SIZE, mqtt_proc, NULL, NULL, NULL,
@@ -74,11 +72,16 @@ K_THREAD_DEFINE(SubsTid, SUBSCRIBE_STACK_SIZE, subscribe_proc, NULL, NULL, NULL,
                 SUBSCRIBE_PRIORITY, 0, 0);
 
 K_SEM_DEFINE(MqttNetReady, 0, 1);
-K_MSGQ_DEFINE(SubsQueue, sizeof(subs_data_t), 2, 4);
+K_MSGQ_DEFINE(SubsQueue, sizeof(subs_data_t *), 4, 4);
+K_MEM_SLAB_DEFINE_STATIC(SubsQueueSlab, sizeof(subs_data_t), 4, 4);
 
-static void subscribe_proc(void *, void *, void *) {
+static void subscribe_proc(void *arg1, void *arg2, void *arg3) {
+    subs_data_t *subs_data = NULL;
     for (;;) {
-        k_sleep(K_SECONDS(1));
+        if (0 == k_msgq_get(&SubsQueue, &subs_data, K_SECONDS(1))) {
+            /* handle incomming message here*/
+            k_mem_slab_free(&SubsQueueSlab, (void **)&subs_data);
+        }
     }
 }
 
@@ -332,9 +335,16 @@ static void mqtt_evt_handler(struct mqtt_client *const client,
         }
         case MQTT_EVT_PUBLISH: {
             LOG_INF("MQTT_EVT_PUBLISH");
+            subs_data_t *subs_data = NULL;
             const struct mqtt_publish_param *pub = &evt->param.publish;
             int32_t len = pub->message.payload.len;
-            int32_t bytes_read = 0;
+            int32_t bytes_read = INT32_MIN;
+
+            if (0 != k_mem_slab_alloc(&SubsQueueSlab, (void **)&subs_data,
+                                      K_MSEC(1000))) {
+                LOG_ERR("Get free subs slab failed");
+                break;
+            }
 
             LOG_INF("MQTT publish received %d, %d bytes", evt->result, len);
             LOG_INF("   id: %d, qos: %d", pub->message_id,
@@ -354,24 +364,27 @@ static void mqtt_evt_handler(struct mqtt_client *const client,
             /* assuming the config message is textual */
             while (len) {
                 bytes_read = mqtt_read_publish_payload_blocking(
-                    client, SubsData.payload, len >= 32 ? 32 : len);
-                if (bytes_read < 0) {
-                    LOG_ERR("failure to read payload");
+                    client, subs_data->payload, len >= 32 ? 32 : len);
+                if (0 > bytes_read) {
+                    LOG_ERR("Failure to read payload");
                     break;
                 }
 
-                SubsData.payload[bytes_read] = '\0';
+                subs_data->payload[bytes_read] = '\0';
                 len -= bytes_read;
             }
 
-            LOG_INF("   payload: %s", SubsData.payload);
-            memcpy(SubsData.topic, pub->message.topic.topic.utf8,
-                   pub->message.topic.topic.size);
+            if (0 <= bytes_read) {
+                LOG_INF("   payload: %s", subs_data->payload);
+                memcpy(subs_data->topic, pub->message.topic.topic.utf8,
+                       pub->message.topic.topic.size);
 
-            int32_t res = k_msgq_put(&SubsQueue, &SubsData, K_MSEC(100));
-            if (0 != res) {
-                LOG_ERR("Timeout to put subs msg into queue");
+                int32_t res = k_msgq_put(&SubsQueue, subs_data, K_MSEC(1000));
+                if (0 != res) {
+                    LOG_ERR("Timeout to put subs msg into queue");
+                }
             }
+
             break;
         }
         case MQTT_EVT_PUBACK: {
@@ -399,7 +412,7 @@ static void mqtt_evt_handler(struct mqtt_client *const client,
             break;
         }
         default: {
-            LOG_INF("MQTT event received %d", evt->type);
+            LOG_WRN("MQTT event unknown %d", evt->type);
             break;
         }
     }
