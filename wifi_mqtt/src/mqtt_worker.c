@@ -5,6 +5,7 @@
  * --------------------------------------------------------------------------*/
 #include "mqtt_worker.h"
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -19,6 +20,7 @@ LOG_MODULE_REGISTER(MQTT, LOG_LEVEL_DBG);
 
 typedef struct subs_data {
     uint8_t topic[MQTT_WORKER_MAX_TOPIC_LEN];
+    uint16_t topic_len;
     uint8_t payload[MQTT_WORKER_MAX_PAYLOAD_LEN];
     uint16_t payload_len;
 } subs_data_t;
@@ -56,22 +58,27 @@ static char BrokerAddrStr[16];
 static char BrokerPortStr[32];
 static int32_t BrokerPort = 0;
 struct mqtt_subscription_list *SubsList = NULL;
+static struct mqtt_publish_param PubData = {0};
 static worker_state_t StateMachine = DNS_RESOLVE;
+static char PublishBuffer[MQTT_WORKER_MAX_PUBLISH_LEN];
 
 bool Connected = false;
 bool Subscribed = false;
 
-#define MQTT_NET_STACK_SIZE (1024)
+static subs_cb_t SubsCb = NULL;
+
+#define MQTT_NET_STACK_SIZE (2 * 1024)
 #define MQTT_NET_PRIORITY   (5)
 K_THREAD_DEFINE(MqttNetTid, MQTT_NET_STACK_SIZE, mqtt_proc, NULL, NULL, NULL,
                 MQTT_NET_PRIORITY, 0, 0);
 
-#define SUBSCRIBE_STACK_SIZE (1024)
+#define SUBSCRIBE_STACK_SIZE (2 * 1024)
 #define SUBSCRIBE_PRIORITY   (5)
 K_THREAD_DEFINE(SubsTid, SUBSCRIBE_STACK_SIZE, subscribe_proc, NULL, NULL, NULL,
                 SUBSCRIBE_PRIORITY, 0, 0);
 
 K_SEM_DEFINE(MqttNetReady, 0, 1);
+K_SEM_DEFINE(PublishAck, 0, 1);
 K_MSGQ_DEFINE(SubsQueue, sizeof(subs_data_t *), 4, 4);
 K_MEM_SLAB_DEFINE_STATIC(SubsQueueSlab, sizeof(subs_data_t), 4, 4);
 
@@ -80,6 +87,10 @@ static void subscribe_proc(void *arg1, void *arg2, void *arg3) {
     for (;;) {
         if (0 == k_msgq_get(&SubsQueue, &subs_data, K_SECONDS(1))) {
             /* handle incomming message here*/
+            if (NULL != SubsCb) {
+                SubsCb((char *)subs_data->topic, subs_data->topic_len,
+                       (char *)subs_data->payload, subs_data->payload_len);
+            }
             k_mem_slab_free(&SubsQueueSlab, (void **)&subs_data);
         }
     }
@@ -217,6 +228,7 @@ static int32_t connect_to_broker(void) {
     } else {
         res = 0;
     }
+
 failed_done:
     return (res);
 }
@@ -277,10 +289,42 @@ failed_done:
     return (res);
 }
 
-void mqtt_worker_init(const char *hostname, const char *addr, int32_t port,
-                      struct mqtt_subscription_list *subs) {
+int32_t mqtt_worker_publish_qos1(const char *topic, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+
+    uint32_t len =
+        vsnprintf(PublishBuffer, MQTT_WORKER_MAX_PUBLISH_LEN, fmt, args);
+    va_end(args);
+
+    PubData.message.payload.len = len;
+    PubData.message.topic.topic.utf8 = (char *)topic;
+    PubData.message.topic.topic.size = strlen((const char *)topic);
+    PubData.message.topic.qos = MQTT_QOS_1_AT_LEAST_ONCE;
+    PubData.message_id += 1U;
+
     struct mqtt_client *client = &ClientCtx;
 
+    k_sem_take(&PublishAck, K_NO_WAIT);
+    int32_t res = mqtt_publish(client, &PubData);
+    if (0 != res) {
+        LOG_ERR("could not publish, err %d", res);
+        goto failed_done;
+    }
+
+    res = k_sem_take(&PublishAck, K_SECONDS(2));
+    if (0 != res) {
+        LOG_ERR("publish ack timeout");
+    }
+failed_done:
+    return (res);
+}
+
+void mqtt_worker_init(const char *hostname, const char *addr, int32_t port,
+                      struct mqtt_subscription_list *subs, subs_cb_t subs_cb) {
+    struct mqtt_client *client = &ClientCtx;
+
+    SubsCb = subs_cb;
     SubsList = subs;
     strncpy(BrokerHostnameStr, hostname, sizeof(BrokerHostnameStr));
     BrokerPort = port;
@@ -302,6 +346,11 @@ void mqtt_worker_init(const char *hostname, const char *addr, int32_t port,
     client->rx_buf_size = sizeof(RxBuffer);
     client->tx_buf = TxBuffer;
     client->tx_buf_size = sizeof(TxBuffer);
+
+    PubData.message.payload.data = (uint8_t *)PublishBuffer;
+    PubData.message_id = 1U;
+    PubData.dup_flag = 0U;
+    PubData.retain_flag = 1U;
 
     k_sem_give(&MqttNetReady);
 }
@@ -339,47 +388,73 @@ static void mqtt_evt_handler(struct mqtt_client *const client,
             const struct mqtt_publish_param *pub = &evt->param.publish;
             int32_t len = pub->message.payload.len;
             int32_t bytes_read = INT32_MIN;
-
-            if (0 != k_mem_slab_alloc(&SubsQueueSlab, (void **)&subs_data,
-                                      K_MSEC(1000))) {
-                LOG_ERR("Get free subs slab failed");
-                break;
-            }
+            bool cleanup_and_break = false;
 
             LOG_INF("MQTT publish received %d, %d bytes", evt->result, len);
             LOG_INF("   id: %d, qos: %d", pub->message_id,
                     pub->message.topic.qos);
-            LOG_INF("   item: %s", pub->message.topic.topic.utf8);
+            LOG_INF("   topic: %s", pub->message.topic.topic.utf8);
 
-            if (MQTT_WORKER_MAX_PAYLOAD_LEN >= (pub->message.payload.len + 1)) {
-                LOG_ERR("Payload to long %d", len);
-                break;
+            if (0 != k_mem_slab_alloc(&SubsQueueSlab, (void **)&subs_data,
+                                      K_MSEC(1000))) {
+                LOG_ERR("Get free subs slab failed");
+                cleanup_and_break = true;
             }
 
-            if (MQTT_WORKER_MAX_TOPIC_LEN >= pub->message.topic.topic.size) {
+            if (MQTT_WORKER_MAX_PAYLOAD_LEN < (pub->message.payload.len + 1)) {
+                LOG_ERR("Payload to long %d", len);
+                cleanup_and_break = true;
+            }
+
+            if (MQTT_WORKER_MAX_TOPIC_LEN < pub->message.topic.topic.size) {
                 LOG_ERR("Topic to long %d", pub->message.topic.topic.size);
+                cleanup_and_break = true;
+            }
+
+            if (!Connected) {
+                LOG_WRN("Not connected yet");
+                cleanup_and_break = true;
+            }
+
+            if (cleanup_and_break) {
+                uint8_t tmp[32];
+                k_mem_slab_free(&SubsQueueSlab, (void **)&subs_data);
+                while (len) { /* cleanup mqtt socket buffer */
+                    bytes_read = mqtt_read_publish_payload_blocking(
+                        client, tmp, len >= 32 ? 32 : len);
+                    if (0 > bytes_read) {
+                        break;
+                    }
+                    len -= bytes_read;
+                }
                 break;
             }
 
             /* assuming the config message is textual */
+            int32_t read_idx = 0;
             while (len) {
                 bytes_read = mqtt_read_publish_payload_blocking(
-                    client, subs_data->payload, len >= 32 ? 32 : len);
+                    client, subs_data->payload + read_idx,
+                    len >= 32 ? 32 : len);
+
                 if (0 > bytes_read) {
                     LOG_ERR("Failure to read payload");
                     break;
                 }
 
-                subs_data->payload[bytes_read] = '\0';
                 len -= bytes_read;
+                read_idx += bytes_read;
             }
 
+            subs_data->payload[pub->message.payload.len] = '\0';
+            subs_data->payload_len = pub->message.payload.len;
+            subs_data->topic_len = pub->message.topic.topic.size;
             if (0 <= bytes_read) {
                 LOG_INF("   payload: %s", subs_data->payload);
                 memcpy(subs_data->topic, pub->message.topic.topic.utf8,
-                       pub->message.topic.topic.size);
-
-                int32_t res = k_msgq_put(&SubsQueue, subs_data, K_MSEC(1000));
+                       subs_data->topic_len);
+                subs_data->topic[subs_data->topic_len] = '\0';
+                int32_t res = k_msgq_put(&SubsQueue, &subs_data, K_MSEC(1000));
                 if (0 != res) {
                     LOG_ERR("Timeout to put subs msg into queue");
                 }
@@ -389,10 +464,11 @@ static void mqtt_evt_handler(struct mqtt_client *const client,
         }
         case MQTT_EVT_PUBACK: {
             if (evt->result != 0) {
-                LOG_ERR("MQTT PUBACK error %d", evt->result);
-                break;
+                LOG_ERR("PUBACK error %d", evt->result);
+            } else {
+                LOG_INF("PUBACK packet id: %u", evt->param.puback.message_id);
+                k_sem_give(&PublishAck);
             }
-            LOG_INF("PUBACK packet id: %u", evt->param.puback.message_id);
             break;
         }
         case MQTT_EVT_PUBREC: {

@@ -20,6 +20,13 @@ static const struct gpio_dt_spec InfoLed =
     GPIO_DT_SPEC_GET(DT_NODELABEL(info_led), gpios);
 
 #define SUBSCRIBE_TOPIC "/test/mosquitto/pubsub/topic"
+#define PUBLISH_TOPIC   "/test/mosquitto/publish/esp32"
+
+void subs_cb(char *topic, uint16_t topic_len, char *payload,
+             uint16_t payload_len) {
+    LOG_INF("Topic: %s", topic);
+    LOG_INF("Payload: %s", payload);
+}
 
 int main(void) {
     LOG_INF("Board: %s", CONFIG_BOARD);
@@ -44,11 +51,17 @@ int main(void) {
         .qos = MQTT_QOS_0_AT_MOST_ONCE};
     struct mqtt_subscription_list subs_list = {
         .list = &subs_topic, .list_count = 1U, .message_id = 1U};
-    mqtt_worker_init("test.mosquitto.org", NULL, 1883, &subs_list);
+    mqtt_worker_init("test.mosquitto.org", NULL, 1883, &subs_list, subs_cb);
 
-    while (1) {
+    int32_t lopp_cnt = 0;
+    for (;;) {
         k_sleep(K_SECONDS(1));
         gpio_pin_toggle_dt(&InfoLed);
+
+        if (0 == lopp_cnt % 8) {
+            mqtt_worker_publish_qos1(PUBLISH_TOPIC, "ESP32_TEST");
+        }
+        lopp_cnt++;
     }
 }
 
