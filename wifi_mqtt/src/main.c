@@ -58,10 +58,10 @@ int main(void) {
         k_sleep(K_SECONDS(1));
         gpio_pin_toggle_dt(&InfoLed);
 
+        lopp_cnt++;
         if (0 == lopp_cnt % 8) {
             mqtt_worker_publish_qos1(PUBLISH_TOPIC, "ESP32_TEST");
         }
-        lopp_cnt++;
     }
 }
 
