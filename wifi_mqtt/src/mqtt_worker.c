@@ -59,6 +59,8 @@ static char BrokerPortStr[32];
 static int32_t BrokerPort = 0;
 struct mqtt_subscription_list *SubsList = NULL;
 static struct mqtt_publish_param PubData = {0};
+static enum mqtt_evt_type LastEvt = 0;
+
 static worker_state_t StateMachine = DNS_RESOLVE;
 static char PublishBuffer[MQTT_WORKER_MAX_PUBLISH_LEN];
 
@@ -152,24 +154,35 @@ static int32_t mqtt_worker_subscribe(void) {
     struct mqtt_client *client = &ClientCtx;
     int32_t res = 0;
 
-    if (NULL != SubsList) {
-        Subscribed = false;
-        res = mqtt_subscribe(client, SubsList);
-        if (0 != res) {
-            LOG_ERR("Failed to subscribe topics, err %d", res);
-            goto failed_done;
-        }
+    if (NULL == SubsList) {
+        LOG_WRN("Subscription list empty");
+        goto failed_done;
+    }
 
+    Subscribed = false;
+    res = mqtt_subscribe(client, SubsList);
+    if (0 != res) {
+        LOG_ERR("Failed to subscribe topics, err %d", res);
+        goto failed_done;
+    }
+
+    while (true) {
+        LastEvt = 0xFF;
         res = wait_for_input(4000);
         if (0 < res) {
             mqtt_input(client);
+            if (LastEvt != MQTT_EVT_SUBACK && LastEvt != 0xFF) {
+                LOG_WRN("Unexpected event got, try again");
+                continue;
+            }
         }
+        break;
+    }
 
-        if (!Subscribed) {
-            LOG_ERR("Subscribe timeout");
-        } else {
-            res = 0;
-        }
+    if (!Subscribed) {
+        LOG_ERR("Subscribe timeout");
+    } else {
+        res = 0;
     }
 
 failed_done:
@@ -368,6 +381,7 @@ void mqtt_worker_init(const char *hostname, int32_t port,
 static void mqtt_evt_handler(struct mqtt_client *const client,
                              const struct mqtt_evt *evt) {
     LOG_INF("mqtt_evt_handler");
+    LastEvt = evt->type;
 
     switch (evt->type) {
         case MQTT_EVT_SUBACK: {
