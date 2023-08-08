@@ -16,8 +16,6 @@
 
 LOG_MODULE_REGISTER(MQTT, LOG_LEVEL_DBG);
 
-#define CLIENT_ID ("zephyrux")
-
 typedef struct subs_data {
     uint8_t topic[MQTT_WORKER_MAX_TOPIC_LEN];
     uint16_t topic_len;
@@ -29,7 +27,8 @@ typedef enum worker_state {
     DNS_RESOLVE,
     CONNECT_TO_BROKER,
     SUBSCRIBE,
-    CONNECTED
+    CONNECTED,
+    DISCONNECTED
 } worker_state_t;
 
 static void mqtt_evt_handler(struct mqtt_client *const client,
@@ -79,10 +78,90 @@ K_THREAD_DEFINE(MqttNetTid, MQTT_NET_STACK_SIZE, mqtt_proc, NULL, NULL, NULL,
 K_THREAD_DEFINE(SubsTid, SUBSCRIBE_STACK_SIZE, subscribe_proc, NULL, NULL, NULL,
                 SUBSCRIBE_PRIORITY, 0, 0);
 
-K_SEM_DEFINE(MqttNetReady, 0, 1);
 K_SEM_DEFINE(PublishAck, 0, 1);
 K_MSGQ_DEFINE(SubsQueue, sizeof(subs_data_t *), 4, 4);
 K_MEM_SLAB_DEFINE_STATIC(SubsQueueSlab, sizeof(subs_data_t), 4, 4);
+
+void mqtt_worker_disconnect(void) {
+    struct mqtt_client *client = &ClientCtx;
+    mqtt_disconnect(client);
+}
+
+void mqtt_worker_connection_attempt(void) {
+    StateMachine = DNS_RESOLVE;
+}
+
+int32_t mqtt_worker_publish_qos1(const char *topic, const char *fmt, ...) {
+    int32_t res = -1;
+
+    va_list args;
+    va_start(args, fmt);
+
+    if (!Connected) {
+        LOG_WRN("Cannot publish, client not connected");
+        goto failed_done;
+    }
+
+    uint32_t len =
+        vsnprintf(PublishBuffer, MQTT_WORKER_MAX_PUBLISH_LEN, fmt, args);
+
+    PubData.message.payload.len = len;
+    PubData.message.topic.topic.utf8 = (char *)topic;
+    PubData.message.topic.topic.size = strlen((const char *)topic);
+    PubData.message.topic.qos = MQTT_QOS_1_AT_LEAST_ONCE;
+    PubData.message_id += 1U;
+
+    struct mqtt_client *client = &ClientCtx;
+
+    k_sem_take(&PublishAck, K_NO_WAIT);
+    res = mqtt_publish(client, &PubData);
+    if (0 != res) {
+        LOG_ERR("could not publish, err %d", res);
+        goto failed_done;
+    }
+
+    res = k_sem_take(&PublishAck, K_SECONDS(2));
+    if (0 != res) {
+        LOG_ERR("publish ack timeout");
+    }
+
+failed_done:
+    va_end(args);
+    return (res);
+}
+
+void mqtt_worker_init(const char *hostname, int32_t port,
+                      struct mqtt_subscription_list *subs, subs_cb_t subs_cb) {
+    struct mqtt_client *client = &ClientCtx;
+
+    SubsCb = subs_cb;
+    SubsList = subs;
+    strncpy(BrokerHostnameStr, hostname, sizeof(BrokerHostnameStr));
+    BrokerPort = port;
+    snprintf(BrokerPortStr, sizeof(BrokerPortStr), "%d", port);
+
+    mqtt_client_init(client);
+
+    /* MQTT client configuration */
+    client->broker = &Broker;
+    client->evt_cb = mqtt_evt_handler;
+    client->protocol_version = MQTT_VERSION_3_1_1;
+    client->client_id.utf8 = (uint8_t *)MQTT_WORKER_CLIENT_ID;
+    client->client_id.size = strlen(MQTT_WORKER_CLIENT_ID);
+    client->password = NULL;
+    client->user_name = NULL;
+
+    /* MQTT buffers configuration */
+    client->rx_buf = RxBuffer;
+    client->rx_buf_size = sizeof(RxBuffer);
+    client->tx_buf = TxBuffer;
+    client->tx_buf_size = sizeof(TxBuffer);
+
+    PubData.message.payload.data = (uint8_t *)PublishBuffer;
+    PubData.message_id = 1U;
+    PubData.dup_flag = 0U;
+    PubData.retain_flag = 1U;
+}
 
 static void subscribe_proc(void *arg1, void *arg2, void *arg3) {
     subs_data_t *subs_data = NULL;
@@ -99,9 +178,8 @@ static void subscribe_proc(void *arg1, void *arg2, void *arg3) {
 }
 
 static void mqtt_proc(void *arg1, void *arg2, void *arg3) {
-    /* wait for start signal */
-    k_sem_take(&MqttNetReady, K_FOREVER);
-    StateMachine = DNS_RESOLVE;
+    StateMachine = DISCONNECTED;
+    Connected = false;
     for (;;) {
         switch (StateMachine) {
             case DNS_RESOLVE: {
@@ -109,28 +187,46 @@ static void mqtt_proc(void *arg1, void *arg2, void *arg3) {
                 int32_t res = dns_resolve();
                 if (0 == res) {
                     StateMachine = CONNECT_TO_BROKER;
+                } else {
+                    k_sleep(K_SECONDS(2));
                 }
                 break;
             }
             case CONNECT_TO_BROKER: {
                 LOG_INF("CONNECT_TO_BROKER");
+                static int32_t err_trials = 0;
                 int32_t res = connect_to_broker();
                 if (0 == res) {
                     LOG_INF("MQTT client connected!");
                     StateMachine = SUBSCRIBE;
+                    err_trials = 0;
                 } else {
-                    /* nothing, make next attempt */
+                    err_trials++;
+                    if (4 == err_trials) {
+                        StateMachine = DNS_RESOLVE;
+                        err_trials = 0;
+                    }
+
+                    if (!Connected) {
+                        StateMachine = DISCONNECTED;
+                    }
                 }
                 break;
             }
             case SUBSCRIBE: {
                 LOG_INF("SUBSCRIBE");
+                static int32_t err_trials = 0;
                 int32_t res = mqtt_worker_subscribe();
                 if (0 == res) {
                     LOG_INF("Subscribe done");
                     StateMachine = CONNECTED;
+                    err_trials = 0;
                 } else {
-                    /* nothing, make next attempt */
+                    err_trials++;
+                    if (4 == err_trials) {
+                        StateMachine = DNS_RESOLVE;
+                        err_trials = 0;
+                    }
                 }
             }
             case CONNECTED: {
@@ -139,9 +235,12 @@ static void mqtt_proc(void *arg1, void *arg2, void *arg3) {
                 if (0 == res) {
                     StateMachine = CONNECTED;
                 } else {
-                    StateMachine = DNS_RESOLVE;
+                    StateMachine = DISCONNECTED;
                 }
                 break;
+            }
+            case DISCONNECTED: {
+                k_sleep(K_MSEC(100));
             }
             default: {
                 break;
@@ -238,6 +337,7 @@ static int32_t connect_to_broker(void) {
     if (!Connected) {
         LOG_ERR("Connection timeout, abort...");
         mqtt_abort(client);
+        res = -1;
     } else {
         res = 0;
     }
@@ -311,72 +411,6 @@ resolve_done:
     LOG_INF("Broker addr %d.%d.%d.%d", in_addr[0], in_addr[1], in_addr[2],
             in_addr[3]);
     return (res);
-}
-
-int32_t mqtt_worker_publish_qos1(const char *topic, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-
-    uint32_t len =
-        vsnprintf(PublishBuffer, MQTT_WORKER_MAX_PUBLISH_LEN, fmt, args);
-    va_end(args);
-
-    PubData.message.payload.len = len;
-    PubData.message.topic.topic.utf8 = (char *)topic;
-    PubData.message.topic.topic.size = strlen((const char *)topic);
-    PubData.message.topic.qos = MQTT_QOS_1_AT_LEAST_ONCE;
-    PubData.message_id += 1U;
-
-    struct mqtt_client *client = &ClientCtx;
-
-    k_sem_take(&PublishAck, K_NO_WAIT);
-    int32_t res = mqtt_publish(client, &PubData);
-    if (0 != res) {
-        LOG_ERR("could not publish, err %d", res);
-        goto failed_done;
-    }
-
-    res = k_sem_take(&PublishAck, K_SECONDS(2));
-    if (0 != res) {
-        LOG_ERR("publish ack timeout");
-    }
-failed_done:
-    return (res);
-}
-
-void mqtt_worker_init(const char *hostname, int32_t port,
-                      struct mqtt_subscription_list *subs, subs_cb_t subs_cb) {
-    struct mqtt_client *client = &ClientCtx;
-
-    SubsCb = subs_cb;
-    SubsList = subs;
-    strncpy(BrokerHostnameStr, hostname, sizeof(BrokerHostnameStr));
-    BrokerPort = port;
-    snprintf(BrokerPortStr, sizeof(BrokerPortStr), "%d", port);
-
-    mqtt_client_init(client);
-
-    /* MQTT client configuration */
-    client->broker = &Broker;
-    client->evt_cb = mqtt_evt_handler;
-    client->protocol_version = MQTT_VERSION_3_1_1;
-    client->client_id.utf8 = (uint8_t *)CLIENT_ID;
-    client->client_id.size = strlen(CLIENT_ID);
-    client->password = NULL;
-    client->user_name = NULL;
-
-    /* MQTT buffers configuration */
-    client->rx_buf = RxBuffer;
-    client->rx_buf_size = sizeof(RxBuffer);
-    client->tx_buf = TxBuffer;
-    client->tx_buf_size = sizeof(TxBuffer);
-
-    PubData.message.payload.data = (uint8_t *)PublishBuffer;
-    PubData.message_id = 1U;
-    PubData.dup_flag = 0U;
-    PubData.retain_flag = 1U;
-
-    k_sem_give(&MqttNetReady);
 }
 
 static void mqtt_evt_handler(struct mqtt_client *const client,

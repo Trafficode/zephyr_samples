@@ -43,7 +43,8 @@ int main(void) {
         return (0);
     }
 
-    wifi_net_init(WIFI_SSID, WIFI_PASS);
+    // wifi_net_init(WIFI_SSID, WIFI_PASS);
+    wifi_net_init("PENTAGRAM_P6362", NULL);
 
     struct mqtt_topic subs_topic = {
         .topic = {.utf8 = (uint8_t *)SUBSCRIBE_TOPIC,
