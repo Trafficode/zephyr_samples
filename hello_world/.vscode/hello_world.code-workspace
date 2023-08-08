@@ -7,13 +7,14 @@
 			"path": "../../../"
 		},
 		{
-			"path": "/root/zephyrproject"
+			"path": "/root/zephyrproject/zephyr/"
 		}
 	],
 	"settings": {
 		"cmake.configureOnOpen": false,
 		"cmake.sourceDirectory": "/root/Workspace/zephyr_samples/hello_world",
 		"C_Cpp.errorSquiggles": "disabled",
+		"C_Cpp.codeAnalysis.clangTidy.enabled": true,
 		"editor.rulers": [
 			80
 		],
@@ -44,5 +45,8 @@
 		"[h]": {
 			"editor.defaultFormatter": "xaver.clang-format"
 		},
+		"[python]": {
+			"editor.defaultFormatter": "ms-python.autopep8"
+		}
 	}
 }

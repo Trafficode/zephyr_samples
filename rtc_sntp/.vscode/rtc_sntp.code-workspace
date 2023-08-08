@@ -14,6 +14,7 @@
 		"cmake.configureOnOpen": false,
 		"cmake.sourceDirectory": "/root/Workspace/zephyr_samples/rtc_sntp",
 		"C_Cpp.errorSquiggles": "disabled",
+		"C_Cpp.codeAnalysis.clangTidy.enabled": true,
 		"editor.rulers": [
 			80
 		],
@@ -44,5 +45,8 @@
 		"[h]": {
 			"editor.defaultFormatter": "xaver.clang-format"
 		},
+		"[python]": {
+			"editor.defaultFormatter": "ms-python.autopep8"
+		}
 	}
 }

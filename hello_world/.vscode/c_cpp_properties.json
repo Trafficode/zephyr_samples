@@ -7,8 +7,6 @@
             ],
             "defines": [],
             "cStandard": "c99",
-            "cppStandard": "gnu++17",
-            "intelliSenseMode": "gcc-arm",
             "compileCommands": "/root/Workspace/zephyr_samples/hello_world/build/compile_commands.json"
         }
     ],

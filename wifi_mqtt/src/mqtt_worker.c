@@ -281,6 +281,7 @@ static int32_t dns_resolve(void) {
     struct zsock_addrinfo *haddr;
     int32_t res = 0;
     struct sockaddr_in *ipv4_broker = (struct sockaddr_in *)&Broker;
+    uint8_t *in_addr = NULL;
 
     ipv4_broker->sin_family = AF_INET;
     ipv4_broker->sin_port = htons(BrokerPort);
@@ -306,7 +307,7 @@ static int32_t dns_resolve(void) {
     net_ipaddr_copy(&ipv4_broker->sin_addr, &net_sin(haddr->ai_addr)->sin_addr);
 
 resolve_done:
-    uint8_t *in_addr = ipv4_broker->sin_addr.s4_addr;
+    in_addr = ipv4_broker->sin_addr.s4_addr;
     LOG_INF("Broker addr %d.%d.%d.%d", in_addr[0], in_addr[1], in_addr[2],
             in_addr[3]);
     return (res);
@@ -442,7 +443,10 @@ static void mqtt_evt_handler(struct mqtt_client *const client,
 
             if (cleanup_and_break) {
                 uint8_t tmp[32];
-                k_mem_slab_free(&SubsQueueSlab, (void **)&subs_data);
+                if (NULL != subs_data) {
+                    k_mem_slab_free(&SubsQueueSlab, (void **)&subs_data);
+                }
+
                 while (len) { /* cleanup mqtt socket buffer */
                     bytes_read = mqtt_read_publish_payload_blocking(
                         client, tmp, len >= 32 ? 32 : len);

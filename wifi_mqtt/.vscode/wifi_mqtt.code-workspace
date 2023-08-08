@@ -7,13 +7,14 @@
 			"path": "../../../"
 		},
 		{
-			"path": "/root/zephyrproject"
+			"path": "/root/zephyrproject/zephyr/"
 		}
 	],
 	"settings": {
 		"cmake.configureOnOpen": false,
 		"cmake.sourceDirectory": "/root/Workspace/zephyr_samples/wifi_mqtt",
 		"C_Cpp.errorSquiggles": "disabled",
+		"C_Cpp.codeAnalysis.clangTidy.enabled": true,
 		"editor.rulers": [
 			80
 		],
@@ -46,7 +47,6 @@
 		},
 		"[python]": {
 			"editor.defaultFormatter": "ms-python.autopep8"
-		},
-		"python.formatting.provider": "autopep8"
+		}
 	}
 }
