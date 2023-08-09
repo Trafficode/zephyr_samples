@@ -27,6 +27,14 @@ static void handle_wifi_disconnect_result(struct net_mgmt_event_callback *cb);
 static void handle_ipv4_result(struct net_if *iface);
 static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
                                     uint32_t mgmt_event, struct net_if *iface);
+static void wifi_status(void);
+static void reconnect_work_handler(struct k_work *work);
+static void reconnect_timer_handler(struct k_timer *dummy);
+
+K_WORK_DEFINE(ReconnectWork, reconnect_work_handler);
+K_TIMER_DEFINE(ReconnectTimer, reconnect_timer_handler, NULL);
+
+static struct wifi_connect_req_params WifiInit = {0};
 
 void wifi_net_init(char *ssid, char *passwd) {
     net_mgmt_init_event_callback(
@@ -40,38 +48,51 @@ void wifi_net_init(char *ssid, char *passwd) {
     net_mgmt_add_event_callback(&ipv4_cb);
 
     struct net_if *iface = net_if_get_default();
-    struct wifi_connect_req_params wifi_params = {0};
-    wifi_params.ssid = (const uint8_t *)ssid;
-    wifi_params.ssid_length = strlen(ssid);
+    WifiInit.ssid = (const uint8_t *)ssid;
+    WifiInit.ssid_length = strlen(ssid);
 
     if (NULL != passwd) {
-        wifi_params.security = WIFI_SECURITY_TYPE_PSK;
-        wifi_params.psk = (uint8_t *)passwd;
-        wifi_params.psk_length = strlen(passwd);
+        WifiInit.security = WIFI_SECURITY_TYPE_PSK;
+        WifiInit.psk = (uint8_t *)passwd;
+        WifiInit.psk_length = strlen(passwd);
     }
 
-    wifi_params.channel = WIFI_CHANNEL_ANY;
-    wifi_params.band = WIFI_FREQ_BAND_2_4_GHZ;
-    wifi_params.mfp = WIFI_MFP_OPTIONAL;
+    WifiInit.channel = WIFI_CHANNEL_ANY;
+    WifiInit.band = WIFI_FREQ_BAND_2_4_GHZ;
+    WifiInit.mfp = WIFI_MFP_OPTIONAL;
 
-    LOG_INF("Connecting to SSID: %s", wifi_params.ssid);
+    LOG_INF("Connecting to SSID: %s", WifiInit.ssid);
 
-    if (net_mgmt(NET_REQUEST_WIFI_CONNECT, iface, &wifi_params,
+    if (net_mgmt(NET_REQUEST_WIFI_CONNECT, iface, &WifiInit,
                  sizeof(struct wifi_connect_req_params))) {
         LOG_ERR("WiFi Connection Request Failed");
     }
 }
 
-static void wifi_status(void);
+static void reconnect_timer_handler(struct k_timer *dummy) {
+    k_work_submit(&ReconnectWork);
+}
+
+static void reconnect_work_handler(struct k_work *work) {
+    struct net_if *iface = net_if_get_default();
+
+    LOG_INF("Make wifi connection attempt...");
+    if (net_mgmt(NET_REQUEST_WIFI_CONNECT, iface, &WifiInit,
+                 sizeof(struct wifi_connect_req_params))) {
+        LOG_ERR("WiFi Connection Request Failed");
+    }
+}
 
 static void handle_wifi_connect_result(struct net_mgmt_event_callback *cb) {
     const struct wifi_status *status = (const struct wifi_status *)cb->info;
 
     if (status->status) {
         LOG_INF("Connection request failed (%d)", status->status);
+        k_timer_start(&ReconnectTimer, K_SECONDS(4), K_NO_WAIT);
     } else {
         LOG_INF("Connected");
         wifi_status();
+        mqtt_worker_connection_attempt();
     }
 }
 
@@ -82,8 +103,10 @@ static void handle_wifi_disconnect_result(struct net_mgmt_event_callback *cb) {
         LOG_INF("Disconnection request (%d)", status->status);
     } else {
         LOG_INF("Disconnected");
-        mqtt_worker_disconnect();
     }
+    mqtt_worker_disconnect();
+    /* one shot timer */
+    k_timer_start(&ReconnectTimer, K_SECONDS(4), K_NO_WAIT);
 }
 
 static void handle_ipv4_result(struct net_if *iface) {
@@ -105,27 +128,28 @@ static void handle_ipv4_result(struct net_if *iface) {
                               sizeof(buf)));
         LOG_INF("Router: %s", net_addr_ntop(AF_INET, &iface->config.ip.ipv4->gw,
                                             buf, sizeof(buf)));
-        mqtt_worker_connection_attempt();
     }
 }
 
 static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
                                     uint32_t mgmt_event, struct net_if *iface) {
     switch (mgmt_event) {
-        case NET_EVENT_WIFI_CONNECT_RESULT:
+        case NET_EVENT_WIFI_CONNECT_RESULT: {
             handle_wifi_connect_result(cb);
             break;
-
-        case NET_EVENT_WIFI_DISCONNECT_RESULT:
+        }
+        case NET_EVENT_WIFI_DISCONNECT_RESULT: {
             handle_wifi_disconnect_result(cb);
             break;
-
-        case NET_EVENT_IPV4_ADDR_ADD:
+        }
+        case NET_EVENT_IPV4_ADDR_ADD: {
             handle_ipv4_result(iface);
             break;
-
-        default:
+        }
+        default: {
+            LOG_ERR("Unknown mgmt_event event: %d", mgmt_event);
             break;
+        }
     }
 }
 

@@ -9,10 +9,11 @@
 #include <stdint.h>
 #include <zephyr/net/mqtt.h>
 
-#define MQTT_WORKER_CLIENT_ID       ("zephyrux")
-#define MQTT_WORKER_MAX_TOPIC_LEN   (128)
-#define MQTT_WORKER_MAX_PAYLOAD_LEN (256)
-#define MQTT_WORKER_MAX_PUBLISH_LEN (256)
+#define MQTT_WORKER_CLIENT_ID           ("zephyrux")
+#define MQTT_WORKER_MAX_TOPIC_LEN       (128)
+#define MQTT_WORKER_MAX_PAYLOAD_LEN     (256)
+#define MQTT_WORKER_MAX_PUBLISH_LEN     (256)
+#define MQTT_WORKER_PUBLISH_ACK_TIMEOUT (4) /* seconds */
 
 typedef void (*subs_cb_t)(char *topic, uint16_t topic_len, char *payload,
                           uint16_t payload_len);

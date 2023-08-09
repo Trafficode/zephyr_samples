@@ -63,8 +63,9 @@ static enum mqtt_evt_type LastEvt = 0;
 static worker_state_t StateMachine = DNS_RESOLVE;
 static char PublishBuffer[MQTT_WORKER_MAX_PUBLISH_LEN];
 
-bool Connected = false;
-bool Subscribed = false;
+static bool Connected = false;
+static bool DisconnectReqExternal = false;
+static bool Subscribed = false;
 
 static subs_cb_t SubsCb = NULL;
 
@@ -83,8 +84,7 @@ K_MSGQ_DEFINE(SubsQueue, sizeof(subs_data_t *), 4, 4);
 K_MEM_SLAB_DEFINE_STATIC(SubsQueueSlab, sizeof(subs_data_t), 4, 4);
 
 void mqtt_worker_disconnect(void) {
-    struct mqtt_client *client = &ClientCtx;
-    mqtt_disconnect(client);
+    DisconnectReqExternal = true;
 }
 
 void mqtt_worker_connection_attempt(void) {
@@ -97,7 +97,7 @@ int32_t mqtt_worker_publish_qos1(const char *topic, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
 
-    if (!Connected) {
+    if (!Connected || DisconnectReqExternal) {
         LOG_WRN("Cannot publish, client not connected");
         goto failed_done;
     }
@@ -106,7 +106,7 @@ int32_t mqtt_worker_publish_qos1(const char *topic, const char *fmt, ...) {
         vsnprintf(PublishBuffer, MQTT_WORKER_MAX_PUBLISH_LEN, fmt, args);
 
     PubData.message.payload.len = len;
-    PubData.message.topic.topic.utf8 = (char *)topic;
+    PubData.message.topic.topic.utf8 = (uint8_t *)topic;
     PubData.message.topic.topic.size = strlen((const char *)topic);
     PubData.message.topic.qos = MQTT_QOS_1_AT_LEAST_ONCE;
     PubData.message_id += 1U;
@@ -120,7 +120,7 @@ int32_t mqtt_worker_publish_qos1(const char *topic, const char *fmt, ...) {
         goto failed_done;
     }
 
-    res = k_sem_take(&PublishAck, K_SECONDS(2));
+    res = k_sem_take(&PublishAck, K_SECONDS(MQTT_WORKER_PUBLISH_ACK_TIMEOUT));
     if (0 != res) {
         LOG_ERR("publish ack timeout");
     }
@@ -206,10 +206,7 @@ static void mqtt_proc(void *arg1, void *arg2, void *arg3) {
                         StateMachine = DNS_RESOLVE;
                         err_trials = 0;
                     }
-
-                    if (!Connected) {
-                        StateMachine = DISCONNECTED;
-                    }
+                    k_sleep(K_SECONDS(2));
                 }
                 break;
             }
@@ -232,15 +229,13 @@ static void mqtt_proc(void *arg1, void *arg2, void *arg3) {
             case CONNECTED: {
                 LOG_INF("CONNECTED");
                 int32_t res = input_handle();
-                if (0 == res) {
-                    StateMachine = CONNECTED;
-                } else {
+                if (0 != res) {
                     StateMachine = DISCONNECTED;
                 }
                 break;
             }
             case DISCONNECTED: {
-                k_sleep(K_MSEC(100));
+                k_sleep(K_MSEC(10));
             }
             default: {
                 break;
@@ -321,6 +316,7 @@ static int32_t connect_to_broker(void) {
     struct mqtt_client *client = &ClientCtx;
     int32_t res = 0;
 
+    DisconnectReqExternal = false;
     Connected = false;
     res = mqtt_connect(client);
     if (res != 0) {
@@ -354,13 +350,19 @@ static int32_t input_handle(void) {
     /* idle and process messages */
     int64_t uptime_ms = k_uptime_get();
     if (uptime_ms < next_alive) {
-        res = wait_for_input(5 * MSEC_PER_SEC);
+        res = wait_for_input(1 * MSEC_PER_SEC);
         if (0 < res) {
             mqtt_input(client);
         }
 
         if (!Connected) {
+            res = -1;
+            goto failed_done;
+        }
+
+        if (DisconnectReqExternal) {
             mqtt_disconnect(client);
+            Connected = false;
             res = -1;
             goto failed_done;
         }
@@ -370,7 +372,7 @@ static int32_t input_handle(void) {
         next_alive = uptime_ms + (60 * MSEC_PER_SEC);
     }
 
-    res = 0;
+    res = 0; /* success done */
 
 failed_done:
     return (res);
@@ -380,13 +382,18 @@ static int32_t dns_resolve(void) {
     static struct zsock_addrinfo hints;
     struct zsock_addrinfo *haddr;
     int32_t res = 0;
-    struct sockaddr_in *ipv4_broker = (struct sockaddr_in *)&Broker;
     uint8_t *in_addr = NULL;
+
+    memset(&Broker, 0, sizeof(struct sockaddr_storage));
+    struct sockaddr_in *ipv4_broker = (struct sockaddr_in *)&Broker;
 
     ipv4_broker->sin_family = AF_INET;
     ipv4_broker->sin_port = htons(BrokerPort);
     res = zsock_inet_pton(AF_INET, BrokerHostnameStr, &ipv4_broker->sin_addr);
     if (0 != res) {
+        in_addr = ipv4_broker->sin_addr.s4_addr;
+        LOG_INF("Broker addr %d.%d.%d.%d", in_addr[0], in_addr[1], in_addr[2],
+                in_addr[3]);
         res = 0; /* 0 - success, string ip address delivered, dns not needed */
         goto resolve_done;
     }
@@ -405,11 +412,11 @@ static int32_t dns_resolve(void) {
     ipv4_broker->sin_family = AF_INET;
     ipv4_broker->sin_port = htons(BrokerPort);
     net_ipaddr_copy(&ipv4_broker->sin_addr, &net_sin(haddr->ai_addr)->sin_addr);
-
-resolve_done:
     in_addr = ipv4_broker->sin_addr.s4_addr;
     LOG_INF("Broker addr %d.%d.%d.%d", in_addr[0], in_addr[1], in_addr[2],
             in_addr[3]);
+
+resolve_done:
     return (res);
 }
 

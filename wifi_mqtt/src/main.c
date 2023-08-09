@@ -43,9 +43,6 @@ int main(void) {
         return (0);
     }
 
-    // wifi_net_init(WIFI_SSID, WIFI_PASS);
-    wifi_net_init("PENTAGRAM_P6362", NULL);
-
     struct mqtt_topic subs_topic = {
         .topic = {.utf8 = (uint8_t *)SUBSCRIBE_TOPIC,
                   .size = strlen(SUBSCRIBE_TOPIC)},
@@ -53,6 +50,8 @@ int main(void) {
     struct mqtt_subscription_list subs_list = {
         .list = &subs_topic, .list_count = 1U, .message_id = 1U};
     mqtt_worker_init("test.mosquitto.org", 1883, &subs_list, subs_cb);
+
+    wifi_net_init(WIFI_SSID, WIFI_PASS);
 
     int32_t lopp_cnt = 0;
     for (;;) {
