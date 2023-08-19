@@ -21,6 +21,8 @@ static struct nvs_fs Fs = {0};
 static const struct gpio_dt_spec InfoLed =
     GPIO_DT_SPEC_GET(DT_NODELABEL(info_led), gpios);
 
+#define BOOT_CNT_ID (1)
+
 int main(void) {
     int32_t rc = 0;
     struct flash_pages_info info = {0};
@@ -49,7 +51,7 @@ int main(void) {
         printk("Unable to get page info\n");
         return 0;
     }
-    printk("NVS sector count %d", NVS_PARTITION_SIZE);
+    printk("NVS sector size %u part size %u\n", info.size, NVS_PARTITION_SIZE);
 
     Fs.sector_size = info.size;
     Fs.sector_count = 3U;
@@ -58,6 +60,22 @@ int main(void) {
     if (rc) {
         printk("Flash Init failed\n");
         return 0;
+    }
+
+    uint32_t boot_counter = UINT32_C(0);
+    size_t area_len = sizeof(boot_counter);
+    rc = nvs_read(&Fs, BOOT_CNT_ID, &boot_counter, area_len);
+    if (rc > 0) { /* item was found, show it */
+        printk("Id: %d, boot counter: %d\n", BOOT_CNT_ID, boot_counter);
+    } else { /* item was not found, add it */
+        printk("No boot counter found, adding it at id %d\n", BOOT_CNT_ID);
+    }
+    boot_counter++;
+
+    if (area_len == nvs_write(&Fs, BOOT_CNT_ID, &boot_counter, area_len)) {
+        printk("Save boot counter %d succ\n", boot_counter);
+    } else {
+        printk("Save boot counter %d err\n", boot_counter);
     }
 
     while (1) {
