@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**"
+            ],
+            "defines": [],
+            "cStandard": "c99",
+            "compileCommands": "/root/Workspace/zephyr_samples/storage/build/compile_commands.json"
+        }
+    ],
+    "version": 4
+}
